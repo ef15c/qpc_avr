@@ -46,32 +46,75 @@
 /* random seed */
 static uint32_t l_rnd;
 
+/* CPU sleeping command */
+static bool sleep = false;
+
 /* Local-scope objects -----------------------------------------------------*/
 
 /* ISRs used in this project ===============================================*/
 ISR(TIMER2_COMPA_vect) {
   QTIMEEVT_TICK_X(0U, (void *)0);  /* process all time events at rate 0 */
 
-
-//    if (Serial.available() > 0) {
-//        switch (Serial.read()) { // read the incoming byte
-//            case 'p':
-//            case 'P':
-//                QACTIVE_POST_ISR(&AO_Table, PAUSE_SIG, 0U);
-//                break;
-//            case 's':
-//            case 'S':
-//                QACTIVE_POST_ISR(&AO_Table, SERVE_SIG, 0U);
-//                break;
-//        }
-//    }
-
   // Refresh LED Display
   Colorduino_refresh_line();
 }
 
+///**********************************************************
+// * Traitement de l'interruption déclenchée par la réception
+// * d'un caractère
+// **********************************************************
+// */
+ISR(USART_RX_vect) {
+  if (bit_is_clear(UCSR0A, UPE0)) {
+    // No Parity error
+    unsigned char c = UDR0;
+    switch (c) { // read the incoming byte
+      case 'p':
+      case 'P':
+        QACTIVE_POST(AO_Table, &pauseEvt, 0U);
+        break;
+      case 's':
+      case 'S':
+        QACTIVE_POST(AO_Table, &serveEvt, 0U);
+        break;
+      case 'l':
+      case 'L':
+        sleep = true;
+        break;
+      case 'h':
+      case 'H':
+        sleep = false;
+        break;
+    }
+  } else {
+    // Parity error, read byte but discard it
+    UDR0;
+  };
+}
+/**********************************************************
+ * Initialisation de l'USART0 de l'ATmega328P
+ **********************************************************
+ */
+void initUSART0(unsigned long baud)
+{
+  // Try u2x mode first
+  uint16_t baud_setting = (F_CPU / 4 / baud - 1) / 2;
+  UCSR0A = 1 << U2X0;
+
+  // assign the baud_setting, a.k.a. ubrr (USART Baud Rate Register)
+  UBRR0H = baud_setting >> 8;
+  UBRR0L = baud_setting;
+
+  UCSR0C = 0x06; /* 8 bits No parity 1 stop bit */
+
+  UCSR0B = (1<<RXEN0)|(1<<TXEN0)|(1<<RXCIE0);
+//  UCSR0B &= ~(1<<UDRIE0);
+}
+
+
 /* BSP functions ===========================================================*/
 void BSP_init(void) {
+    initUSART0(115200);
     Colorduino_IO_Init();           //Init IO
     Colorduino_LED_Init();          //Init LED Hardware
  
@@ -229,18 +272,18 @@ void QV_onIdle(void) {
   /* Display the philosopher, fork and table state on LED panel */
   Colorduino_FlipPage();
   /* toggle Top left LED on and then off, see NOTE1 */
-  memcpy(Colorduino_getCurWriteFrame(), Colorduino_getCurDrawFrame, Colorduino_getPixelRGBSize());
+  memcpy(Colorduino_getCurWriteFrame(), Colorduino_getCurDrawFrame(), Colorduino_getPixelRGBSize());
   Colorduino_SetPixel(7, 0,   0,   0,   0); // Idle off
   Colorduino_FlipPage();
 
-#ifdef NDEBUG
-  /* Put the CPU and peripherals to the low-power mode.
-  * you might need to customize the clock management for your application,
-  * see the datasheet for your particular AVR MCU.
-  */
-  SMCR = (0 << SM0) | (1 << SE); // idle mode, adjust to your project
-  QV_CPU_SLEEP();
-#endif
+  if (sleep) {
+    /* Put the CPU and peripherals to the low-power mode.
+    * you might need to customize the clock management for your application,
+    * see the datasheet for your particular AVR MCU.
+    */
+    SMCR = (0 << SM0) | (1 << SE); // idle mode, adjust to your project
+    QV_CPU_SLEEP();
+  }
 }
 
 /*..........................................................................*/
