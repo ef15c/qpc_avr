@@ -41,22 +41,64 @@
 #include <avr/interrupt.h> 
 /* add other drivers if necessary... */
 
-//Q_DEFINE_THIS_FILE
+Q_DEFINE_THIS_FILE
 
 /* random seed */
 static uint32_t l_rnd;
 
 /* CPU sleeping command */
-static bool sleep = false;
+static volatile bool sleep = false;
+static volatile bool nothingToDo;
+
+/* Counter for CPU usage and Idle time measure */
+static volatile uint16_t sysTickCount;
+static uint16_t previousCycleTime;
+static uint16_t busyTime;
+
+#define BUF_SIZE_NB_BIT (7)
+#define BUF_SIZE (1<<BUF_SIZE_NB_BIT)
+#define NEXT_CHAR(x) ((x)+1 & (BUF_SIZE-1))
+static char txBuffer[BUF_SIZE];
+static volatile uint8_t txBufHead, txBufTail;
 
 /* Local-scope objects -----------------------------------------------------*/
 
 /* ISRs used in this project ===============================================*/
+#define LED_REFRESH_PER_QTIME_TICKS (BSP_LED_ROW_REFRESHES_PER_SEC/BSP_TICKS_PER_SEC);
+
 ISR(TIMER2_COMPA_vect) {
-  QTIMEEVT_TICK_X(0U, (void *)0);  /* process all time events at rate 0 */
+  static uint8_t count = LED_REFRESH_PER_QTIME_TICKS;
+
+  sysTickCount++; /* Increment every 1.25 ms */
+  if (--count==0) {
+    count = LED_REFRESH_PER_QTIME_TICKS;
+    QTIMEEVT_TICK_X(0U, (void *)0);  /* process all time events at rate 0 */
+    nothingToDo = false;
+  }
 
   // Refresh LED Display
   Colorduino_refresh_line();
+}
+
+///**********************************************************
+// * Traitement de l'interruption déclenchée par la
+// * disponibité du registre d'envoi d'un caractère
+// **********************************************************
+// */
+ISR(USART_UDRE_vect) {
+  char c;
+
+  Q_ASSERT(txBufHead != txBufTail); /* TxBuffer should not be empty */
+  
+  c = txBuffer[txBufTail];
+  txBufTail = NEXT_CHAR(txBufTail);
+
+  UDR0 = c;
+
+  if (txBufHead == txBufTail) {
+    // Buffer empty, so disable interrupts
+    UCSR0B &= ~(1<<UDRIE0);
+  }
 }
 
 ///**********************************************************
@@ -72,10 +114,12 @@ ISR(USART_RX_vect) {
       case 'p':
       case 'P':
         QACTIVE_POST(AO_Table, &pauseEvt, 0U);
+        nothingToDo = false;
         break;
       case 's':
       case 'S':
         QACTIVE_POST(AO_Table, &serveEvt, 0U);
+        nothingToDo = false;
         break;
       case 'l':
       case 'L':
@@ -85,12 +129,39 @@ ISR(USART_RX_vect) {
       case 'H':
         sleep = false;
         break;
+      case 'd':
+      case 'D':
+        BSP_tx_write_string_P(PSTR("stc="));
+        BSP_tx_write_u16dec(sysTickCount);
+        BSP_tx_write_string_P(PSTR("\r\n"));
+        
+        BSP_tx_write_string_P(PSTR("pct="));
+        BSP_tx_write_u16dec(previousCycleTime);
+        BSP_tx_write_string_P(PSTR("\r\n"));
+        
+        BSP_tx_write_string_P(PSTR("bt="));
+        BSP_tx_write_u16dec(busyTime);
+        BSP_tx_write_string_P(PSTR("\r\n"));
+        
+        BSP_tx_write_string_P(PSTR("---\r\n"));
+
+        BSP_tx_write_string_P(PSTR("sleep="));
+        BSP_tx_write_u16dec(sleep);
+        BSP_tx_write_string_P(PSTR("\r\n"));
+
+        BSP_tx_write_string_P(PSTR("ntd="));
+        BSP_tx_write_u16dec(nothingToDo);
+        BSP_tx_write_string_P(PSTR("\r\n"));
+
+        BSP_tx_write_string_P(PSTR("---\r\n"));
+        break;
     }
   } else {
     // Parity error, read byte but discard it
     UDR0;
   };
 }
+
 /**********************************************************
  * Initialisation de l'USART0 de l'ATmega328P
  **********************************************************
@@ -108,9 +179,62 @@ void initUSART0(unsigned long baud)
   UCSR0C = 0x06; /* 8 bits No parity 1 stop bit */
 
   UCSR0B = (1<<RXEN0)|(1<<TXEN0)|(1<<RXCIE0);
-//  UCSR0B &= ~(1<<UDRIE0);
+  UCSR0B &= ~(1<<UDRIE0);
 }
 
+size_t BSP_tx_write_char(const char c) {
+  uint8_t next = NEXT_CHAR(txBufHead);
+  
+  if (next == txBufTail) {
+    /* txBuffer is full */
+    return 0;
+  }
+
+  txBuffer[txBufHead] = c;
+
+  txBufHead = next;
+  UCSR0B |= 1<<UDRIE0;
+
+  return 1;
+}
+
+size_t BSP_tx_write_string(const char *s) {
+  size_t len = 0;
+  
+  while (*s) {
+    if (BSP_tx_write_char(*s++)) {
+      len++;
+    } else {
+      break;
+    }
+  }
+  return len;
+}
+
+size_t BSP_tx_write_string_P(PGM_P s) {
+  size_t len = 0;
+
+  char c;
+  while ((c=pgm_read_byte(s++)) != 0) {
+    if (BSP_tx_write_char(c)) {
+      len++;
+    } else {
+      break;
+    }
+  }
+  return len;
+}
+
+size_t BSP_tx_write_u16dec(uint16_t d) {
+  size_t len = 0;
+  uint16_t quotient = d/10;
+  
+  if (quotient!=0) {
+    len = BSP_tx_write_u16dec(quotient);
+  }
+  
+  return len+BSP_tx_write_char(d%10+'0');
+}
 
 /* BSP functions ===========================================================*/
 void BSP_init(void) {
@@ -259,24 +383,29 @@ void QF_onStartup(void) {
     TCNT2  = 0U;
 
     // set the output-compare register based on the desired tick frequency
-    OCR2A  = (F_CPU / BSP_TICKS_PER_SEC / 1024U) - 1U;
-
-    /* Initialize Idle LED */
-    Colorduino_SetPixel(7, 0, 255, 255, 255); // Idle on
+    OCR2A  = (F_CPU / BSP_LED_ROW_REFRESHES_PER_SEC / 1024U) - 1U;
 }
 /*..........................................................................*/
 void QF_onCleanup(void) {
 }
 /*..........................................................................*/
 void QV_onIdle(void) {
-  /* Display the philosopher, fork and table state on LED panel */
-  Colorduino_FlipPage();
-  /* toggle Top left LED on and then off, see NOTE1 */
-  memcpy(Colorduino_getCurWriteFrame(), Colorduino_getCurDrawFrame(), Colorduino_getPixelRGBSize());
-  Colorduino_SetPixel(7, 0,   0,   0,   0); // Idle off
-  Colorduino_FlipPage();
+  uint16_t pTime;
+  uint8_t indic;
 
-  if (sleep) {
+  nothingToDo = true;
+
+  pTime = previousCycleTime;
+  previousCycleTime = sysTickCount;
+  
+  indic = ((uint16_t) (previousCycleTime-busyTime))*255/(previousCycleTime-pTime);
+  Colorduino_SetPixel(7, 0, indic, indic, indic); // Busy indicator
+
+  /* Display the busy and awake indicators, philosopher, fork and table state on LED panel */
+  Colorduino_FlipPage();
+  memcpy(Colorduino_getCurWriteFrame(), Colorduino_getCurDrawFrame(), Colorduino_getPixelRGBSize());
+
+  while (sleep && nothingToDo) {
     /* Put the CPU and peripherals to the low-power mode.
     * you might need to customize the clock management for your application,
     * see the datasheet for your particular AVR MCU.
@@ -284,6 +413,7 @@ void QV_onIdle(void) {
     SMCR = (0 << SM0) | (1 << SE); // idle mode, adjust to your project
     QV_CPU_SLEEP();
   }
+  busyTime = sysTickCount;
 }
 
 /*..........................................................................*/
@@ -291,8 +421,15 @@ Q_NORETURN Q_onAssert(char const * const module, int_t const loc) {
     /*
     * NOTE: add here your application-specific error handling
     */
-    /* RESET */
-    QF_RESET();
+    BSP_tx_write_string_P(PSTR("ASSERTION:"));
+    BSP_tx_write_string(module);
+    BSP_tx_write_u16dec(loc);
+    for (uint32_t volatile i = 100000U; i > 0U; --i) {
+    }
+    QF_INT_DISABLE(); // disable all interrupts
+    QF_RESET();  // reset the CPU
+    for (;;) {
+    }
 }
 
 /* 

@@ -45,18 +45,6 @@
 #define QF_MAX_EPOOL         0U
 
 
-#ifndef SREG
-#define SREG _SFR_IO8(0x3F)
-#define SREG_C                          0
-#define SREG_Z                          1
-#define SREG_N                          2
-#define SREG_V                          3
-#define SREG_S                          4
-#define SREG_H                          5
-#define SREG_T                          6
-#define SREG_I                          7
-#endif
-
 /* QF CPU reset for AVR */
 #define QF_RESET()       __asm__ __volatile__ ("jmp 0x0000" ::)
 

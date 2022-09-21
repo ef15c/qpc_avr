@@ -33,13 +33,16 @@
 *****************************************************************************/
 #ifndef BSP_H
 #define BSP_H
+#include <stddef.h>
+#include <avr/pgmspace.h>
 
 #ifdef __cplusplus
 extern "C"
 {
 #endif
 
-#define BSP_TICKS_PER_SEC    800U
+#define BSP_TICKS_PER_SEC           100U
+#define BSP_LED_ROW_REFRESHES_PER_SEC 800U
 
 void BSP_init(void);
 void BSP_displayPaused(uint8_t paused);
@@ -49,6 +52,11 @@ void BSP_terminate(int16_t result);
 
 void BSP_randomSeed(uint32_t seed);   /* random seed */
 uint32_t BSP_random(void);            /* pseudo-random generator */
+
+size_t BSP_tx_write_char(const char c);
+size_t BSP_tx_write_string(const char *s);
+size_t BSP_tx_write_string_P(PGM_P s);
+size_t BSP_tx_write_u16dec(uint16_t d);
 
 #ifdef __cplusplus
 }

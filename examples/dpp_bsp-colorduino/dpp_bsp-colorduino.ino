@@ -33,6 +33,9 @@ void setup() {
                (void *)0,                 /* stack storage (not used) */
                0U,                        /* size of the stack [bytes] */
                (QEvt *)0);                /* initialization event */
+
+  BSP_tx_write_string_P(PSTR("QP/C: "));
+  BSP_tx_write_string_P(PSTR(QP_VERSION_STR"\r\n"));
 }
 
 void loop() {
